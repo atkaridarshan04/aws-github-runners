@@ -4,7 +4,7 @@
 
 A generic, portable blueprint for self-hosted ephemeral GitHub Actions runners on AWS: EC2 Spot instances booting from a custom Packer AMI, autoscaled by the community [`github-aws-runners/terraform-aws-github-runner`](https://github.com/github-aws-runners/terraform-aws-github-runner) module.
 
-Nothing here is tied to a specific org, account, or codebase — replace the placeholders (`<ORG>`, `<AWS_ACCOUNT_ID>`, `<PROJECT_NAME>`, `<REGION>`) with your own values and this applies to any repo or stack.
+Terraform in [`terraform/`](terraform) is driven entirely by `terraform.tfvars` (region, account ID, project name, VPC/subnets), so this applies to any repo or stack without editing source.
 
 Scope is deliberately just the compute/pipeline layer — how jobs get a runner, not what those jobs do once they're on it. Any workflow you'd normally run can run on top of this.
 
@@ -57,11 +57,19 @@ Full breakdown of each component (webhook Lambda, scale-up Lambda, binary syncer
 
 ```
 .
-├── README.md              — you are here
-└── docs/
-    ├── 01-concepts.md
-    ├── 02-setup-guide.md
-    ├── 03-org-rollout.md
-    ├── 04-runner-strategies.md
-    └── 05-operations.md
+├── README.md                   — you are here
+├── docs/
+│   ├── 01-concepts.md
+│   ├── 02-setup-guide.md
+│   ├── 03-org-rollout.md
+│   ├── 04-runner-strategies.md
+│   └── 05-operations.md
+├── terraform/                  — the runner fleet (github_runner module wrapper)
+│   ├── versions.tf
+│   ├── variables.tf
+│   ├── main.tf
+│   ├── outputs.tf
+│   └── terraform.tfvars.example
+└── scripts/
+    └── download-lambda-packages.sh
 ```

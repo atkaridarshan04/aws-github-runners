@@ -11,7 +11,9 @@ This is a manual, on-demand step — not something that belongs in your nightly 
 ```bash
 cd terraform-aws-github-runner/images/ubuntu-jammy
 packer build -var "region=<REGION>" github_agent.ubuntu.pkr.hcl
-terraform apply   # picks up the new AMI automatically via the name filter
+
+cd -   # back to this repo
+terraform -chdir=terraform apply   # picks up the new AMI automatically via the name filter
 ```
 
 ### Housekeeping

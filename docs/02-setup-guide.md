@@ -8,7 +8,7 @@ Background on *why* each piece exists is in [concepts](01-concepts.md) — this 
 
 | Tool | Purpose | Version used as reference |
 |---|---|---|
-| Terraform | Provision runner infra, IAM | 1.13.x |
+| Terraform | Provision runner infra, IAM | >= 1.13.x (latest stable: 1.16.x) |
 | Packer | Build the custom runner AMI | latest 1.x |
 | AWS CLI | Auth, secrets, general AWS ops | v2 |
 | GitHub admin access | Create the GitHub App (org admin, or repo admin for a personal-account/single-repo setup) | — |
@@ -16,7 +16,7 @@ Background on *why* each piece exists is in [concepts](01-concepts.md) — this 
 
 You'll need permission to create IAM roles, EC2 instances/AMIs, Lambda functions, API Gateway, Secrets Manager secrets, and CloudWatch log groups.
 
-Replace the placeholders (`<ORG>`, `<AWS_ACCOUNT_ID>`, `<PROJECT_NAME>`, `<REGION>`) below with your own values throughout.
+The Terraform in [`terraform/`](../terraform) is parameterized with variables — no placeholder find-and-replace needed. You'll fill in real values in `terraform.tfvars` in Step 4.
 
 ## Step 1 — Create a GitHub App
 
@@ -117,98 +117,27 @@ Requirements to run this:
 
 ## Step 4 — Deploy the Terraform module
 
-Don't hand-roll the webhook/scaling logic — wrap the community-maintained [`github-aws-runners/terraform-aws-github-runner`](https://github.com/github-aws-runners/terraform-aws-github-runner) module.
+Don't hand-roll the webhook/scaling logic — the [`terraform/`](../terraform) directory in this repo wraps the community-maintained [`github-aws-runners/terraform-aws-github-runner`](https://github.com/github-aws-runners/terraform-aws-github-runner) module (pinned to `7.11.0`) and is ready to run as-is:
 
-```hcl
-# security group for the runner to reach your cluster/services
-resource "aws_security_group" "runner_access" {
-  name_prefix = "<PROJECT_NAME>-runner-access-sg"
-  vpc_id      = var.vpc_id
-}
+| File | What's in it |
+|---|---|
+| [`terraform/versions.tf`](../terraform/versions.tf) | Terraform/provider version constraints |
+| [`terraform/variables.tf`](../terraform/variables.tf) | Every input you can tune — region, account, VPC, instance types, fleet size, etc. |
+| [`terraform/main.tf`](../terraform/main.tf) | The security group, the Secrets Manager lookup, and the `github_runner` module block itself |
+| [`terraform/outputs.tf`](../terraform/outputs.tf) | Webhook URL, runner IAM role ARN, and other values you need after `apply` |
+| [`terraform/terraform.tfvars.example`](../terraform/terraform.tfvars.example) | Template for your own `terraform.tfvars` (gitignored) |
 
-data "aws_secretsmanager_secret" "github_app_secrets" {
-  name = "<PROJECT_NAME>-github-app-secrets"
-}
+Set it up:
 
-data "aws_secretsmanager_secret_version" "github_app_secrets" {
-  secret_id = data.aws_secretsmanager_secret.github_app_secrets.id
-}
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# edit terraform.tfvars: aws_region, aws_account_id, project_name, vpc_id, subnet_ids
 
-locals {
-  github_app_secrets = jsondecode(data.aws_secretsmanager_secret_version.github_app_secrets.secret_string)
-}
-
-module "github_runner" {
-  source  = "github-aws-runners/github-runner/aws"
-  version = "7.6.0" # pin explicitly — do not float on a range
-
-  aws_region = "<REGION>"
-  vpc_id     = var.vpc_id
-  subnet_ids = var.subnet_ids
-  prefix     = "<PROJECT_NAME>-gh-runner"
-
-  github_app = {
-    id             = local.github_app_secrets["github_app_id"]
-    key_base64     = local.github_app_secrets["github_app_key_base64"]
-    webhook_secret = local.github_app_secrets["github_app_webhook_secret"]
-  }
-
-  runner_os           = "linux"
-  runner_architecture = "x64"
-  runner_run_as       = "ubuntu"
-
-  # Spot for cost, price-capacity-optimized for fewer interruptions
-  instance_types                 = ["t3a.medium", "c5a.large", "c6a.large", "t3.medium", "c5.large", "c6i.large"]
-  instance_target_capacity_type  = "spot"
-  instance_allocation_strategy   = "price-capacity-optimized"
-
-  runners_maximum_count           = 8
-  create_service_linked_role_spot = true
-  enable_organization_runners     = true   # false if you only want it scoped to one repo
-  enable_ephemeral_runners        = true
-  enable_userdata                 = false  # not needed — everything is baked into the AMI
-  scale_down_schedule_expression  = "cron(*/5 * * * ? *)"
-  minimum_running_time_in_minutes = 15
-
-  runner_additional_security_group_ids = [aws_security_group.runner_access.id]
-
-  # Matches the AMI built in Step 3 — filter by name pattern, not a hardcoded ID,
-  # so a new Packer build is picked up automatically on the next apply.
-  ami = {
-    filter = {
-      name  = ["<PROJECT_NAME>-runner-ubuntu-jammy-amd64-*"]
-      state = ["available"]
-    }
-    owners = ["<AWS_ACCOUNT_ID>"]
-  }
-
-  block_device_mappings = [{
-    device_name           = "/dev/sda1"
-    volume_size           = 100
-    volume_type           = "gp3"
-    delete_on_termination = true
-    encrypted              = true
-  }]
-
-  # Lambda zips downloaded separately — see note below
-  webhook_lambda_zip                = "${path.module}/lambda-packages/webhook.zip"
-  runners_lambda_zip                = "${path.module}/lambda-packages/runners.zip"
-  runner_binaries_syncer_lambda_zip = "${path.module}/lambda-packages/runner-binaries-syncer.zip"
-
-  log_level                 = "info"
-  logging_retention_in_days = 7
-}
+../scripts/download-lambda-packages.sh 7.11.0   # must match the module version pinned in main.tf
 ```
 
-> **Lambda packages**: the module's Lambda code is distributed as versioned zip releases, not vendored into the module itself. Download the release matching your module version before `terraform apply`:
->
-> ```bash
-> curl -L -o webhook.zip \
->   https://github.com/github-aws-runners/terraform-aws-github-runner/releases/download/v7.6.0/webhook.zip
-> # repeat for runners.zip and runner-binaries-syncer.zip
-> ```
->
-> Script this and keep the zips gitignored — they're build artifacts, not source. **Match the zip version to the module version** (`source = "github-aws-runners/github-runner/aws", version = "7.6.0"` pairs with the `v7.6.0` release assets) — a mismatch here is a real, easy-to-miss failure mode.
+> **Why a separate download step**: the module's Lambda code is distributed as versioned zip releases, not vendored into the module itself — `main.tf` references them from `terraform/lambda-packages/`, which is gitignored (build artifacts, not source). If you bump the module version in `main.tf`, re-run this script with the matching version — a mismatch here is a real, easy-to-miss failure mode.
 
 ```bash
 terraform init
@@ -216,9 +145,15 @@ terraform plan
 terraform apply
 ```
 
+`project_name` drives both the AMI name filter and the `-github-app-secrets` Secrets Manager lookup — make sure it matches what you used in Steps 2 and 3.
+
 ## Step 5 — Point the GitHub App at the deployed webhook
 
-After `apply`, grab the API Gateway endpoint from Terraform outputs and set it as the GitHub App's webhook URL (App settings → **Webhook → Payload URL**).
+```bash
+terraform output -raw webhook_endpoint
+```
+
+Set the printed URL as the GitHub App's webhook URL (App settings → **Webhook → Payload URL**).
 
 ## Step 6 — Use it in workflows
 
