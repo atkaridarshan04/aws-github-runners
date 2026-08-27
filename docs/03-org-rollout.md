@@ -7,7 +7,7 @@ The [setup guide](02-setup-guide.md) gets you one fleet, in one AWS account, for
 | Concern | Personal / single-team | Org-level |
 |---|---|---|
 | **GitHub App install** | Installed on your personal account or one repo | Installed at the org level, scoped to "All repositories" or a curated repo list |
-| **`enable_organization_runners`** | Either works | `true` — runners register at the org, not a single repo, so any repo in-scope can use them |
+| **`enable_organization_runners`** | Must be `false` — the org-level GitHub runner-registration API doesn't exist for personal user accounts; setting `true` here makes the scale-up Lambda fail on every job (a runner never launches, jobs sit "waiting for a runner" forever) | `true` — runners register at the org, not a single repo, so any repo in-scope can use them |
 | **Runner groups** | Not needed | Use [GitHub runner groups](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/managing-access-to-self-hosted-runners-using-groups) to restrict which repos/teams can target which fleet — otherwise every repo in the org can burn your Spot budget |
 | **Who holds the GitHub App private key** | You | A team/service account with rotation policy — this key is org-wide runner-registration authority, treat it like a production credential |
 | **AWS account boundary** | Any account you control | Usually its own AWS account (or a dedicated OU) so runner IAM roles and Spot spend are isolated from other workloads — makes cost allocation and blast-radius containment much simpler |

@@ -42,9 +42,9 @@ variable "scale_up_reserved_concurrent_executions" {
 }
 
 variable "enable_organization_runners" {
-  description = "true = runners register at the GitHub org level (any in-scope repo can use them). false = scoped to a single repo. See docs/03-org-rollout.md."
+  description = "true = runners register at the GitHub org level (any in-scope repo can use them)."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "root_volume_size_gb" {

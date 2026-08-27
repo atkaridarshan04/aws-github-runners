@@ -15,3 +15,5 @@ terraform/lambda-packages/
 
 # Scratch clone of the upstream repo for the Packer AMI builds
 /terraform-aws-github-runner/
+
+.DS_Store
