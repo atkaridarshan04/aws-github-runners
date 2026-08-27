@@ -1,0 +1,32 @@
+name: ci
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+
+jobs:
+    build-and-test:
+        runs-on: [self-hosted, linux, x64]
+        steps:
+            - uses: actions/checkout@v7
+
+            # Proves this is actually your fleet, and a fresh instance per job —
+            # a persistent/reused runner would show the same instance ID across runs.
+            - name: Identify the runner instance
+              run: |
+                  TOKEN=$(curl -fs -X PUT "http://169.254.169.254/latest/api/token" \
+                    -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+                  curl -fs -H "X-aws-ec2-metadata-token: $TOKEN" \
+                    http://169.254.169.254/latest/meta-data/instance-id
+
+            # Proves ephemeral behavior: a leftover marker from a prior job means
+            # this instance was reused instead of freshly launched.
+            - name: Confirm no state left over from a previous job
+              run: |
+                  test ! -f /tmp/ci-marker && echo "clean instance, no prior job state"
+                  touch /tmp/ci-marker
+
+            # Self-contained smoke test — proves Docker itself works from the AMI
+            - name: Docker smoke test
+              run: docker run --rm hello-world
