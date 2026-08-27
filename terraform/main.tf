@@ -52,13 +52,14 @@ module "github_runner" {
   scale_down_schedule_expression  = var.scale_down_schedule_expression
   minimum_running_time_in_minutes = var.minimum_running_time_in_minutes
 
+  scale_up_reserved_concurrent_executions = var.scale_up_reserved_concurrent_executions
+
   runner_additional_security_group_ids = [aws_security_group.runner_access.id]
 
-  # Matches the AMI built by Packer (docs/02-setup-guide.md, step 3) — filter by
-  # name pattern, not a hardcoded ID, so a new build is picked up automatically.
+  # Matches the AMI built by Packer
   ami = {
     filter = {
-      name  = ["${var.project_name}-runner-ubuntu-jammy-amd64-*"]
+      name  = ["github-runner-ubuntu-jammy-amd64-*"]
       state = ["available"]
     }
     owners = [var.aws_account_id]

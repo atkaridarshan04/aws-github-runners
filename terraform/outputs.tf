@@ -5,7 +5,7 @@ output "webhook_endpoint" {
 
 output "runner_iam_role_arn" {
   description = "IAM role assumed by runner EC2 instances — attach additional policies here if jobs need AWS access."
-  value       = module.github_runner.runners.role_runner.arn
+  value       = one(module.github_runner.runners.role_runner[*].arn)
 }
 
 output "runner_security_group_id" {

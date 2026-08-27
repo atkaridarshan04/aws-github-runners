@@ -35,6 +35,12 @@ variable "runners_maximum_count" {
   default     = 8
 }
 
+variable "scale_up_reserved_concurrent_executions" {
+  description = "Reserved concurrency for the scale-up Lambda. AWS requires >= 10 unreserved concurrent executions to always remain in the account/region — on a fresh account with a low account-wide Lambda concurrency quota, even the upstream default of 1 can violate that floor. Set to -1 to remove the reservation entirely (no limit) if you hit 'decreases account's UnreservedConcurrentExecution below its minimum value of [10]' on apply; set back to a small positive number once you've requested a concurrency quota increase."
+  type        = number
+  default     = 1
+}
+
 variable "enable_organization_runners" {
   description = "true = runners register at the GitHub org level (any in-scope repo can use them). false = scoped to a single repo. See docs/03-org-rollout.md."
   type        = bool

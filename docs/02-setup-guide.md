@@ -22,8 +22,10 @@ The Terraform in [`terraform/`](../terraform) is parameterized with variables �
 
 Self-hosted runners need an identity to register themselves with GitHub. A GitHub App (not a PAT) is the standard mechanism because it can be scoped tightly and rotated without touching a human account.
 
-1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App** (org-level: **Organization Settings → Developer settings**; personal-account/single-repo: your personal **Settings**).
-2. Repository permissions:
+1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App** (org-level: **Organization Settings → Developer settings**; personal-account/single-repo: your personal **Settings**). **Where you create it decides where it can be installed** — a personal-account app can only be installed on repos you own; an org app can only be installed within that org. For this guide (personal/single-account scope), create it under your personal Settings.
+2. **Homepage URL**: the repo or org this app belongs to, e.g. `https://github.com/octo-org/aws-github-runners`. Just needs to be a valid URL — not used functionally by runner registration.
+3. **Webhook URL**: leave any placeholder for now (e.g. `https://example.com`) — you don't have the real API Gateway endpoint until after Step 4, and you'll update it in Step 5.
+4. Repository permissions:
 
     | Permission | Access |
     |---|---|
@@ -32,15 +34,15 @@ Self-hosted runners need an identity to register themselves with GitHub. A GitHu
     | Administration | Read & write |
     | Metadata | Read-only |
 
-3. Organization permissions (org-scoped installs only):
+5. Organization permissions (org-scoped installs only):
 
     | Permission | Access |
     |---|---|
     | Self-hosted runners | Read & write |
 
-4. Subscribe to the **Workflow job** webhook event.
-5. Generate a private key (downloads a `.pem`), note the **App ID**, and set a **Webhook secret**.
-6. Install the app on your account/org, scoped to the repo(s) you want to use it with.
+6. Subscribe to the **Workflow job** webhook event.
+7. Generate a private key (downloads a `.pem`), note the **App ID**, and set a **Webhook secret**.
+8. Install the app (button on the app's page) — choose **Only select repositories** and pick the repo(s) you're testing with, rather than **All repositories**, so this stays scoped while you're getting it working. Installation scope and `enable_organization_runners` (Step 4) are independent settings that both have to allow a repo through — see [org rollout](03-org-rollout.md) once this works end to end and you're ready to open it up.
 
 ## Step 2 — Store the GitHub App credentials in AWS Secrets Manager
 
@@ -107,13 +109,14 @@ What happens under the hood:
 2. It runs the provisioning scripts (Docker, runner binary, AWS CLI, your extra tools)
 3. It stops the instance and snapshots it as a new AMI
 4. It terminates the temporary instance
-5. The resulting AMI appears in your account, named by convention — e.g. `<PROJECT_NAME>-runner-ubuntu-jammy-amd64-<timestamp>`
+5. The resulting AMI appears in your account, named `github-runner-ubuntu-jammy-amd64-<timestamp>` — that's a **hardcoded value in the template** (`ami_name` in the `source` block), not something you pass in with `-var`. `terraform/main.tf`'s AMI filter is written to match this exact name, so the stock template works with no changes.
 
 Requirements to run this:
 
 - AWS credentials with EC2 (`RunInstances`, `CreateImage`, `TerminateInstances`, snapshot permissions) in the target account
 - Outbound internet from wherever Packer runs (to fetch the base AMI's packages)
-- The **naming convention must match** whatever `filter.name` pattern your Terraform config expects (Step 4) — this is how Terraform picks up new builds automatically.
+
+If this AWS account will ever build AMIs for more than one project, the shared `github-runner-*` name will collide across them — fork the `.pkr.hcl` to prefix `ami_name` with something project-specific, and update `terraform/main.tf`'s `ami.filter.name` to match. Not needed for this single-project guide.
 
 ## Step 4 — Deploy the Terraform module
 
@@ -145,7 +148,7 @@ terraform plan
 terraform apply
 ```
 
-`project_name` drives both the AMI name filter and the `-github-app-secrets` Secrets Manager lookup — make sure it matches what you used in Steps 2 and 3.
+`project_name` drives the `-github-app-secrets` Secrets Manager lookup — make sure it matches what you used in Step 2. The AMI filter (Step 3) matches on the Packer template's own naming, not `project_name`.
 
 ## Step 5 — Point the GitHub App at the deployed webhook
 
@@ -171,7 +174,7 @@ jobs:
   build-and-test:
     runs-on: [self-hosted, linux, x64]
     steps:
-      - uses: actions/checkout@<pinned-sha>
+      - uses: actions/checkout@v7
 
       # Proves this is actually your fleet, and a fresh instance per job —
       # a persistent/reused runner would show the same instance ID across runs.
@@ -195,6 +198,29 @@ jobs:
 ```
 
 Two things worth checking the first time you run this: the instance ID printed should be different on every run (confirms ephemeral, not reused), and the smoke test should start immediately without any `apt install`/image-layer-download output beyond pulling `hello-world` itself (confirms Docker and the runner binary came from the AMI, not a fresh install). If you see package-manager output on a "normal" run, something's pulling from outside the AMI and it's worth finding out what.
+
+### Verify the infrastructure actually did something
+
+Once the workflow run finishes, check CloudWatch Logs — the module creates these automatically (see [operations](05-operations.md)), no manual setup needed:
+
+```bash
+aws logs describe-log-groups \
+  --log-group-name-prefix "/aws/lambda/<PROJECT_NAME>-gh-runner" \
+  --query 'logGroups[].logGroupName'
+
+aws logs describe-log-groups \
+  --log-group-name-prefix "/github-self-hosted-runners/<PROJECT_NAME>-gh-runner" \
+  --query 'logGroups[].logGroupName'
+```
+
+You should see:
+
+- `/aws/lambda/<PROJECT_NAME>-gh-runner-webhook` — confirms the webhook Lambda received and validated the `workflow_job` event
+- `/aws/lambda/<PROJECT_NAME>-gh-runner-scale-up` — confirms it launched the Spot instance; check this one first if nothing else shows up
+- `/aws/lambda/<PROJECT_NAME>-gh-runner-scale-down` — populates on its own schedule, not tied to this specific run
+- `/github-self-hosted-runners/<PROJECT_NAME>-gh-runner/{messages,user_data,runner,runner-startup}` — the runner instance's own logs, shipped via the CloudWatch agent baked into the AMI/launch template
+
+If the `/github-self-hosted-runners/...` group never appears, the instance launched but didn't get far enough to register — the scale-up Lambda's log group is where to look next. Retention on all of these is controlled by `logging_retention_in_days` in `terraform/variables.tf`.
 
 ## Next
 

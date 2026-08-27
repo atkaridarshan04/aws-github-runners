@@ -12,3 +12,6 @@ override.tf.json
 
 # Downloaded module Lambda zips — build artifacts, not source
 terraform/lambda-packages/
+
+# Scratch clone of the upstream repo for the Packer AMI builds
+/terraform-aws-github-runner/
