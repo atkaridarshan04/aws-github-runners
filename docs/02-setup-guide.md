@@ -4,6 +4,18 @@ This walks through standing up **one** ephemeral Spot runner fleet, backed by on
 
 Background on *why* each piece exists is in [concepts](01-concepts.md) — this doc is the "what to actually run."
 
+## Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Step 1: Create a GitHub App](#step-1--create-a-github-app)
+3. [Step 2: Store the credentials in Secrets Manager](#step-2--store-the-github-app-credentials-in-aws-secrets-manager)
+4. [Step 3: Build the custom AMI](#step-3--build-the-custom-ami)
+5. [Step 4: Deploy the Terraform module](#step-4--deploy-the-terraform-module)
+6. [Step 5: Point the GitHub App at the webhook](#step-5--point-the-github-app-at-the-deployed-webhook)
+7. [Step 6: Use it in workflows](#step-6--use-it-in-workflows)
+
+The order matters: the secret (step 2) and the AMI (step 3) must exist before `terraform plan` in step 4, because the module reads the secret and looks up the AMI at plan time.
+
 ## Prerequisites
 
 | Tool | Purpose | Version used as reference |
@@ -59,6 +71,8 @@ Self-hosted runners need an identity to register themselves with GitHub. A GitHu
     ![Selecting repositories and reviewing permissions before install](assets/gh-app/gh-app-install-2.png)
     ![Installed app's settings, confirming repo access afterward](assets/gh-app/gh-app-repo-permissions.png)
 
+**Verify:** the app's settings page shows an App ID, a generated private key, and the installation lists the repos you chose.
+
 ## Step 2 — Store the GitHub App credentials in AWS Secrets Manager
 
 Base64-encode the private key:
@@ -87,6 +101,12 @@ aws secretsmanager create-secret \
 Never commit the raw JSON or `.pem` — only reference the secret name from Terraform.
 
 ![Secret created in AWS Secrets Manager](assets/aws/aws-secret.png)
+
+**Verify:**
+
+```bash
+aws secretsmanager describe-secret --secret-id "<PROJECT_NAME>-github-app-secrets" --region <REGION> --query Name
+```
 
 ## Step 3 — Build the custom AMI
 
@@ -138,6 +158,14 @@ Requirements to run this:
 
 If this AWS account will ever build AMIs for more than one project, the shared `github-runner-*` name will collide across them — fork the `.pkr.hcl` to prefix `ami_name` with something project-specific, and update `terraform/main.tf`'s `ami.filter.name` to match. Not needed for this single-project guide.
 
+**Verify:**
+
+```bash
+aws ec2 describe-images --owners self --region <REGION> \
+  --filters "Name=name,Values=github-runner-ubuntu-jammy-amd64-*" \
+  --query 'Images[].[Name,ImageId]' --output table
+```
+
 ## Step 4 — Deploy the Terraform module
 
 Don't hand-roll the webhook/scaling logic — the [`terraform/`](../terraform) directory in this repo wraps the community-maintained [`github-aws-runners/terraform-aws-github-runner`](https://github.com/github-aws-runners/terraform-aws-github-runner) module (pinned to `7.11.0`) and is ready to run as-is:
@@ -150,17 +178,27 @@ Don't hand-roll the webhook/scaling logic — the [`terraform/`](../terraform) d
 | [`terraform/outputs.tf`](../terraform/outputs.tf) | Webhook URL, runner IAM role ARN, and other values you need after `apply` |
 | [`terraform/terraform.tfvars.example`](../terraform/terraform.tfvars.example) | Template for your own `terraform.tfvars` (gitignored) |
 
-Set it up:
+### Configure and deploy
 
 ```bash
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars: aws_region, aws_account_id, project_name, vpc_id, subnet_ids
 
-../scripts/download-lambda-packages.sh 7.11.0   # must match the module version pinned in main.tf
+../scripts/download-lambda-packages.sh
 ```
 
-> **Why a separate download step**: the module's Lambda code is distributed as versioned zip releases, not vendored into the module itself — `main.tf` references them from `terraform/lambda-packages/`, which is gitignored (build artifacts, not source). If you bump the module version in `main.tf`, re-run this script with the matching version — a mismatch here is a real, easy-to-miss failure mode.
+The script reads the module version pinned in `main.tf`, so the zips always match it.
+
+> **Why a separate download step**: the module's Lambda code is distributed as versioned zip releases, not vendored into the module itself — `main.tf` references them from `terraform/lambda-packages/`, which is gitignored (build artifacts, not source). After bumping the module version in `main.tf`, re-run the script.
+
+Optional inputs in `terraform.tfvars`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `runner_extra_labels` | `["aws-spot"]` | Labels the runners register with. Add one to `runs-on` to target this fleet (`runs-on: [self-hosted, linux, x64, aws-spot]`). A job listing only `self-hosted, linux, x64` can still land here. |
+| `create_service_linked_role_spot` | `true` | Lets the scale-up Lambda create the `AWSServiceRoleForEC2Spot` role on the first Spot launch. Only needed until the role exists; setting `false` afterwards just removes that permission. |
+| `runners_maximum_count` | `8` | Cap on concurrent runners, see [operations](05-operations.md#capacity-and-limits). |
 
 ```bash
 terraform init
@@ -173,6 +211,14 @@ terraform apply
 ![terraform apply output showing the created resources and outputs](assets/terraform-output.png)
 ![The six Lambda functions the module created](assets/aws/aws-lambda-functions.png)
 
+If the first job fails to launch with a service-linked-role error in the scale-up Lambda's log, create the Spot role once:
+
+```bash
+aws iam create-service-linked-role --aws-service-name spot.amazonaws.com
+```
+
+**Verify:** `terraform output` prints the webhook endpoint, and the module's Lambda functions exist in the console.
+
 ## Step 5 — Point the GitHub App at the deployed webhook
 
 ```bash
@@ -183,9 +229,11 @@ Set the printed URL as the GitHub App's webhook URL (App settings → **Webhook 
 
 ![Webhook URL field updated with the real API Gateway endpoint](assets/gh-app/gh-webhok-url.png)
 
+**Verify:** in the app's settings, **Advanced → Recent deliveries** shows deliveries with a `200` response once a workflow job is queued.
+
 ## Step 6 — Use it in workflows
 
-Any job with the `self-hosted` label (plus whatever OS/arch labels you configured) now routes to your fleet instead of GitHub-hosted runners:
+A job routes to this fleet when its `runs-on` includes the fleet's labels: `self-hosted`, the OS and architecture labels, and the custom label from `runner_extra_labels` (`aws-spot` by default).
 
 ```yaml
 name: ci
@@ -197,7 +245,7 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, linux, x64, aws-spot]
     steps:
       - uses: actions/checkout@v7
 
@@ -251,11 +299,87 @@ You should see:
 - `/aws/lambda/<PROJECT_NAME>-gh-runner-webhook` — confirms the webhook Lambda received and validated the `workflow_job` event
 - `/aws/lambda/<PROJECT_NAME>-gh-runner-scale-up` — confirms it launched the Spot instance; check this one first if nothing else shows up
 - `/aws/lambda/<PROJECT_NAME>-gh-runner-scale-down` — populates on its own schedule, not tied to this specific run
+- `/aws/apigateway/<PROJECT_NAME>-gh-runner-webhook-access` — one line per webhook call (source IP, status), useful when GitHub reports failed deliveries
 - `/github-self-hosted-runners/<PROJECT_NAME>-gh-runner/{messages,user_data,runner,runner-startup}` — the runner instance's own logs, shipped via the CloudWatch agent baked into the AMI/launch template
 
 If the `/github-self-hosted-runners/...` group never appears, the instance launched but didn't get far enough to register — the scale-up Lambda's log group is where to look next. Retention on all of these is controlled by `logging_retention_in_days` in `terraform/variables.tf`.
 
 ![All expected log groups present in CloudWatch](assets/aws/aws-log-groups.png)
+
+### Open a shell on a runner
+
+`enable_ssm_on_runners = true` gives the runner role the permissions Session Manager needs, so you can get a shell on an instance with no SSH key and no inbound port. Runners are ephemeral, so open the session while a job is running; the instance disappears once the job ends.
+
+**Prerequisites**
+
+- AWS CLI v2 and the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (`brew install --cask session-manager-plugin` on macOS).
+- An IAM identity allowed to start sessions on the runners (policy below).
+- The SSM agent running on the instance. AWS lists Ubuntu Server 22.04 as having it preinstalled. If it doesn't, check the agent on the instance (`snap list amazon-ssm-agent` or `systemctl status amazon-ssm-agent`) and add its install to the Packer template if it's missing.
+- Network access from the instance to the SSM service (outbound internet or VPC endpoints).
+
+**Find the instance**
+
+Runner instances are named `<PROJECT_NAME>-gh-runner-action-runner`:
+
+```bash
+aws ec2 describe-instances --region <REGION> \
+  --filters "Name=tag:Name,Values=<PROJECT_NAME>-gh-runner-action-runner" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].[InstanceId,LaunchTime]' --output table
+
+aws ssm describe-instance-information --region <REGION> \
+  --query 'InstanceInformationList[].[InstanceId,PingStatus]' --output table
+```
+
+**Connect and look around**
+
+```bash
+aws ssm start-session --target <INSTANCE_ID> --region <REGION>
+```
+
+You land in a shell as `ssm-user`; use `sudo -i` for root. Useful once inside:
+
+```bash
+docker ps                                            # containers the job started
+ls /opt/actions-runner                               # runner install directory
+sudo tail -f /opt/actions-runner/_diag/Runner_*.log  # runner log; look for "Listening for Jobs"
+```
+
+Type `exit` to leave. Add `--profile <PROFILE>` to the AWS commands if you use named profiles.
+
+**Who can connect**
+
+The runner role's permissions don't let any person connect; that takes `ssm:StartSession` on their own IAM identity. This policy limits it to the runner instances:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:instance/*",
+      "Condition": {
+        "StringEquals": { "aws:ResourceTag/Name": "<PROJECT_NAME>-gh-runner-action-runner" }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ssm:<REGION>::document/SSM-SessionManagerRunShell"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["ssm:TerminateSession", "ssm:ResumeSession"],
+      "Resource": "arn:aws:ssm:*:*:session/${aws:username}-*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances", "ssm:DescribeInstanceInformation"],
+      "Resource": "*"
+    }
+  ]
+}
+```
 
 ## Next
 

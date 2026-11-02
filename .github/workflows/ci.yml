@@ -8,9 +8,9 @@ on:
 
 jobs:
     build-and-test:
-        runs-on: [self-hosted, linux, x64]
+        runs-on: [self-hosted, linux, x64, aws-spot]
         steps:
-            - uses: actions/checkout@v7
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             # Proves this is actually your fleet, and a fresh instance per job —
             # a persistent/reused runner would show the same instance ID across runs.

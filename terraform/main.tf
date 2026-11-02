@@ -18,6 +18,13 @@ resource "aws_security_group" "runner_access" {
   tags        = var.tags
 }
 
+# Webhook (API Gateway) access logs: who called the endpoint and with what result.
+resource "aws_cloudwatch_log_group" "webhook_access" {
+  name              = "/aws/apigateway/${var.project_name}-gh-runner-webhook-access"
+  retention_in_days = var.logging_retention_in_days
+  tags              = var.tags
+}
+
 module "github_runner" {
   source  = "github-aws-runners/github-runner/aws"
   version = "7.11.0" # pin explicitly — do not float on a range. Bump deliberately; the
@@ -38,6 +45,7 @@ module "github_runner" {
   runner_os           = "linux"
   runner_architecture = "x64"
   runner_run_as       = "ubuntu"
+  runner_extra_labels = var.runner_extra_labels
 
   # Spot for cost, price-capacity-optimized for fewer interruptions.
   instance_types                = var.instance_types
@@ -45,9 +53,10 @@ module "github_runner" {
   instance_allocation_strategy  = "price-capacity-optimized"
 
   runners_maximum_count           = var.runners_maximum_count
-  create_service_linked_role_spot = true
+  create_service_linked_role_spot = var.create_service_linked_role_spot
   enable_organization_runners     = var.enable_organization_runners
   enable_ephemeral_runners        = true
+  enable_ssm_on_runners           = true  # shell access via Session Manager (docs/02-setup-guide.md)
   enable_userdata                 = false # not needed — everything is baked into the AMI
   scale_down_schedule_expression  = var.scale_down_schedule_expression
   minimum_running_time_in_minutes = var.minimum_running_time_in_minutes
@@ -80,4 +89,9 @@ module "github_runner" {
 
   log_level                 = var.log_level
   logging_retention_in_days = var.logging_retention_in_days
+
+  webhook_lambda_apigateway_access_log_settings = {
+    destination_arn = aws_cloudwatch_log_group.webhook_access.arn
+    format          = "$context.identity.sourceIp - - [$context.requestTime] \"$context.httpMethod $context.routeKey $context.protocol\" $context.status $context.responseLength $context.requestId"
+  }
 }

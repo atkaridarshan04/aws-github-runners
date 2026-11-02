@@ -6,6 +6,9 @@ project_name   = "myproject"
 
 scale_up_reserved_concurrent_executions = -1
 
+# runner_extra_labels             = ["aws-spot"]   # workflows use: runs-on: [self-hosted, linux, x64, aws-spot]
+# create_service_linked_role_spot = false          # optional once AWSServiceRoleForEC2Spot exists in the account
+
 vpc_id     = "vpc-0123456789abcdef0"
 subnet_ids = ["subnet-0123456789abcdef0", "subnet-0fedcba9876543210"]
 

@@ -41,6 +41,18 @@ variable "scale_up_reserved_concurrent_executions" {
   default     = 1
 }
 
+variable "runner_extra_labels" {
+  description = "Labels added to the runners on top of self-hosted/linux/x64. Workflows add one to runs-on to target this fleet specifically; a job that lists only self-hosted/linux/x64 can still land here."
+  type        = list(string)
+  default     = ["aws-spot"]
+}
+
+variable "create_service_linked_role_spot" {
+  description = "Give the scale-up Lambda permission to create the EC2 Spot service-linked role (AWSServiceRoleForEC2Spot) on first use. Only needed until the role exists; setting it to false afterwards just removes that permission."
+  type        = bool
+  default     = true
+}
+
 variable "enable_organization_runners" {
   description = "true = runners register at the GitHub org level (any in-scope repo can use them)."
   type        = bool
@@ -60,7 +72,8 @@ variable "scale_down_schedule_expression" {
 }
 
 variable "minimum_running_time_in_minutes" {
-  description = "Minimum time a runner instance must run before scale-down will consider terminating it as orphaned — must cover your actual boot time."
+  description = "Minimum time a runner instance must have been running before scale-down may terminate it, if it is not busy."
+  type        = number
   default     = 15
 }
 

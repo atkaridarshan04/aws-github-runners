@@ -2,6 +2,14 @@
 
 Read this before the [setup guide](02-setup-guide.md) if you want to know *why* each step exists, not just what to type. If you just want to get running, skip to the setup guide and come back here when something doesn't make sense.
 
+## Contents
+
+- [The problem with GitHub-hosted runners](#the-problem-with-github-hosted-runners)
+- [The three ideas behind this setup](#the-three-ideas-that-make-self-hosting-not-a-chore)
+- [Request flow](#request-flow)
+- [How fast is boot, really?](#how-fast-is-boot-really)
+- [The moving parts](#the-moving-parts-and-why-each-one-exists)
+
 ## The problem with GitHub-hosted runners
 
 GitHub-hosted runners are fine until they aren't: shared queue during traffic spikes, capped minutes/cost on private repos, and no control over what's pre-installed on the box (so every job re-installs the same tools). Self-hosting fixes all three, at the cost of owning the infrastructure.
@@ -38,7 +46,7 @@ flowchart TD
 
 - **Without** a prebuilt AMI: installing Docker + the runner binary + tools at boot via `user_data`, plus a cold binary download from github.com, is the slow path — the module's docs note the binary download alone "can occasionally take more than 10 minutes" without the S3 binary cache.
 - **With** a prebuilt AMI: that install step is skipped entirely — what's left is just EC2 launch time + runner-service startup + registration handshake, which is a matter of seconds to low tens of seconds on Linux, but this depends on your instance type, AMI size, and region, and isn't something the upstream project publishes a hard number for.
-- The module's own scale-down logic assumes a runner *might* legitimately take up to `runner_boot_time_in_minutes` (default **5 minutes**) to register before it's treated as orphaned and cleaned up 
+- The module's own scale-down logic assumes a runner *might* legitimately take up to `runner_boot_time_in_minutes` (default **5 minutes**) to register before it's treated as orphaned and cleaned up, so a slow boot is tolerated up to that point.
 
 ### Measure it for your own AMI/instance type
 

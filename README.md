@@ -45,19 +45,29 @@ Full breakdown of each component (webhook Lambda, scale-up Lambda, binary syncer
 | [docs/02-setup-guide.md](docs/02-setup-guide.md) | Step-by-step: GitHub App → secrets → build the AMI → deploy Terraform → wire it up |
 | [docs/03-org-rollout.md](docs/03-org-rollout.md) | What changes going from a personal/single-team setup to an org-wide rollout |
 | [docs/04-runner-strategies.md](docs/04-runner-strategies.md) | Ephemeral vs. persistent, one fleet vs. several ("multi-cluster") — when to use which |
-| [docs/05-operations.md](docs/05-operations.md) | AMI rebuild cadence, housekeeping, cost notes |
+| [docs/05-operations.md](docs/05-operations.md) | Capacity limits, AMI rebuilds, cost notes, troubleshooting, teardown |
 
 ## Quick start
 
-1. Have an AWS account with a VPC, and org/repo admin on GitHub. Full prerequisites: [docs/02-setup-guide.md](docs/02-setup-guide.md#prerequisites).
-2. Follow the [setup guide](docs/02-setup-guide.md) start to finish — it's linear, six steps.
-3. Only after that works: read [runner strategies](docs/04-runner-strategies.md) to decide if you need more than one fleet, and [org rollout](docs/03-org-rollout.md) if this is going beyond your own account.
+Prerequisites: an AWS account with a VPC, org or repo admin on GitHub, Terraform, Packer and the AWS CLI ([full list](docs/02-setup-guide.md#prerequisites)).
+
+1. [Create a GitHub App](docs/02-setup-guide.md#step-1--create-a-github-app)
+2. [Store its credentials in Secrets Manager](docs/02-setup-guide.md#step-2--store-the-github-app-credentials-in-aws-secrets-manager)
+3. [Build the custom AMI](docs/02-setup-guide.md#step-3--build-the-custom-ami)
+4. [Deploy the Terraform](docs/02-setup-guide.md#step-4--deploy-the-terraform-module)
+5. [Point the app at the webhook](docs/02-setup-guide.md#step-5--point-the-github-app-at-the-deployed-webhook)
+6. [Use it in a workflow](docs/02-setup-guide.md#step-6--use-it-in-workflows)
+
+Only after that works: read [runner strategies](docs/04-runner-strategies.md) to decide whether you need more than one fleet, and [org rollout](docs/03-org-rollout.md) if this is going beyond your own account. Capacity limits, troubleshooting and teardown are in [operations](docs/05-operations.md).
 
 ## Repo layout
 
 ```
 .
 ├── README.md                   — you are here
+├── .github/workflows/
+│   ├── ci.yml                  — smoke-test workflow that runs on the fleet (manual trigger)
+│   └── terraform-checks.yml    — terraform fmt + validate on PRs
 ├── docs/
 │   ├── 01-concepts.md
 │   ├── 02-setup-guide.md
@@ -69,7 +79,7 @@ Full breakdown of each component (webhook Lambda, scale-up Lambda, binary syncer
 │   ├── variables.tf
 │   ├── main.tf
 │   ├── outputs.tf
-│   └── terraform.tfvars.example
+│   └── terraform.tfvars.example   — copy to terraform.tfvars (gitignored)
 └── scripts/
     └── download-lambda-packages.sh
 ```
